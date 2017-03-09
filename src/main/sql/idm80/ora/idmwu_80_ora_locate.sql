@@ -13,7 +13,7 @@
 -- limitations under the License.
 --
 -- ========================================================================
---    THIS IS THE VERSION FOR SAP(R) IDM 8.0 ON ORACLE
+--    THIS IS THE VERSION FOR SAP(R) IDM 8.0 ON ORACLE(R)
 -- ========================================================================
 -- The latest version of this code, as well as versions for
 -- other SAP(R) IDM releases and other databases can be found at
