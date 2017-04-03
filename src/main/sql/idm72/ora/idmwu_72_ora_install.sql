@@ -39,6 +39,116 @@
 --------------------------------------------------------
 --  DDL for Type z_idmwu_clob_obj
 --------------------------------------------------------
+CREATE OR REPLACE TYPE z_idmwu_clob_obj AUTHID CURRENT_USER
+AS
+    OBJECT
+    (
+        node_id   NUMBER(10,0) ,
+        node_name VARCHAR2(4000 byte) ,
+        node_data CLOB ,
+        CONSTRUCTOR
+    FUNCTION z_idmwu_clob_obj
+        RETURN SELF
+    AS
+        RESULT ,
+        CONSTRUCTOR
+        FUNCTION z_idmwu_clob_obj(
+                iv_dbms_sql_cursor IN INTEGER )
+            RETURN SELF
+        AS
+            RESULT ,
+            MEMBER PROCEDURE define_columns(
+                    iv_dbms_sql_cursor IN INTEGER) );
+                                        /
+CREATE OR REPLACE TYPE BODY z_idmwu_clob_obj
+AS
+    /**
+    * Constructor. Sets all attributes to NULL.
+    * @return  New object type instance.
+    */
+    CONSTRUCTOR
+    FUNCTION z_idmwu_clob_obj
+        RETURN SELF
+    AS
+        RESULT
+    AS
+    BEGIN
+        RETURN;
+    END z_idmwu_clob_obj;
+/**
+* Constructs a new instance with values fetched from DBMS_SQL cursor
+*
+* @param   IV_DBMS_SQL_CURSOR
+* @return  new object type instance
+*/
+CONSTRUCTOR
+    FUNCTION z_idmwu_clob_obj(
+            iv_dbms_sql_cursor IN INTEGER)
+        RETURN SELF
+    AS
+        RESULT
+    AS
+        lv_buf_val        VARCHAR2(32767 BYTE);
+        lv_buf_len        INTEGER := 32767;
+        lv_bytes_returned INTEGER;
+        lv_offset         INTEGER := 0;
+    BEGIN
+        dbms_sql.column_value(iv_dbms_sql_cursor, 1, node_id);
+        dbms_sql.column_value(iv_dbms_sql_cursor, 2, node_name);
+        -- Create CLOB that will not be cached and free'd after this call
+        dbms_lob.createtemporary(node_data, FALSE, dbms_lob.call);
+        -- Piecewise fetching of the LONG column into VARCHAR2 buffer
+        LOOP
+            dbms_sql.column_value_long( iv_dbms_sql_cursor ,3 --position of LONG column in cursor's
+            -- SELECT list
+            ,lv_buf_len ,lv_offset ,lv_buf_val ,lv_bytes_returned );
+            EXIT
+        WHEN lv_bytes_returned = 0;
+            -- Concatentation operator vs. dbms_lob.append
+            -- performed the same in my tests on 11g
+            node_data := node_data || lv_buf_val;
+            lv_offset := lv_offset + lv_bytes_returned;
+        END LOOP;
+        RETURN;
+    END z_idmwu_clob_obj;
+/**
+* Defines all columns in DBMS_SQL cursor
+*
+* @param  IV_DBMS_SQL_CURSOR    parsed DBMS_SQL cursor
+*/
+MEMBER PROCEDURE define_columns(
+            iv_dbms_sql_cursor IN INTEGER )
+    AS
+    BEGIN
+        -- INT column
+        dbms_sql.define_column( iv_dbms_sql_cursor ,1 ,node_id );
+        -- VARCHAR2 column
+        dbms_sql.define_column( --
+        iv_dbms_sql_cursor      --cursor ID
+        ,2                      -- column position, starting at 1
+        ,node_name              -- value of the column being defined
+        ,4000                   -- Max. size in bytes for VARCHAR2 columns
+        );
+        -- LONG column
+        dbms_sql.define_column_long( iv_dbms_sql_cursor ,3 );
+    END define_columns;
+END;
+/
+--------------------------------------------------------
+--  DDL for Type z_idmwu_clob_tab
+--------------------------------------------------------
+CREATE OR REPLACE TYPE Z_IDMWU_CLOB_TAB
+-- =================================================
+-- Specifying an invoker_rights_clause doesn't seem
+-- to work for anything other than OBJECT types
+-- =================================================
+-- AUTHID CURRENT_USER
+AS
+    TABLE OF z_idmwu_clob_obj;
+/
+--------------------------------------------------------
+--  DDL for Package z_idmwu
+--------------------------------------------------------
 CREATE OR REPLACE PACKAGE z_idmwu AUTHID CURRENT_USER
 AS
     /**
@@ -107,8 +217,9 @@ AS
         FOR lo_test IN
         (
             SELECT *
-            FROM TABLE(filter_read_source_ptf(NULL) ) 
-            where rownum < 100 )
+            FROM TABLE(filter_read_source_ptf(null) ) 
+        --  where rownum < 100 
+        )
         LOOP
             dbms_output.put_line(
                 'NODE_ID: ' 
@@ -219,6 +330,13 @@ AS
             INNER JOIN user_objects b
             ON  a.name=b.object_name
             AND a.type=b.object_type
+            where b.object_id in (
+                SELECT distinct b.object_id
+                FROM user_source a
+                INNER JOIN user_objects b
+                ON  a.name=b.object_name
+                AND a.type=b.object_type 
+                WHERE a.text like '%'||upper(iv_search_term)||'%' )
             ORDER BY a.type
               ,a.name
               ,a.line
@@ -235,7 +353,13 @@ AS
             ELSE
                 -- Pipe final source object unless null
                 IF lo_clob_object IS NOT NULL THEN
-                    PIPE ROW(lo_clob_object);
+                    if iv_search_term is not null then
+                        if instr(lo_clob_object.node_data, iv_search_term) > 0 then
+                            PIPE ROW(lo_clob_object);
+                        end if;
+                    else
+                        PIPE ROW(lo_clob_object);
+                    end if;
                 END IF;
                 
                 lo_clob_object := NEW z_idmwu_clob_obj();
@@ -257,9 +381,13 @@ AS
         END LOOP;
 
         --Pipe last row collected by loop, if any
-        IF lo_clob_object IS NOT NULL THEN
-           PIPE ROW(lo_clob_object);
-        END IF;
+        if iv_search_term is not null then
+            if instr(lo_clob_object.node_data, iv_search_term) > 0 then
+                PIPE ROW(lo_clob_object);
+            end if;
+        else
+            PIPE ROW(lo_clob_object);
+        end if;
 
     END filter_read_source_ptf;
 END z_idmwu;

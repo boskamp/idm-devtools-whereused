@@ -32,6 +32,39 @@
 --           have been removed from the SAP(R) IDM database.
 --
 -- ========================================================================
-DROP PACKAGE z_idmwu;
-DROP TYPE z_idmwu_clob_tab;
-DROP TYPE z_idmwu_clob_obj;
+begin
+    execute immediate 'DROP PACKAGE z_idmwu';
+    dbms_output.put_line('Package dropped');
+exception 
+    when others then
+        if sqlcode != -4043 then
+            raise;
+        else
+            dbms_output.put_line('Package not found, nothing to do');
+        end if;
+end;
+/
+begin
+    execute immediate 'DROP TYPE z_idmwu_clob_obj';
+    dbms_output.put_line('Object type dropped');
+exception 
+    when others then
+        if sqlcode != -4043 then
+            raise;
+        else
+            dbms_output.put_line('Object type not found, nothing to do');
+        end if;
+end;
+/
+begin
+    execute immediate 'DROP TYPE z_idmwu_clob_tab';
+    dbms_output.put_line('Table type dropped');
+exception 
+    when others then
+        if sqlcode != -4043 then
+            raise;
+        else
+            dbms_output.put_line('Table type not found, nothing to do');
+        end if;
+end;
+/
