@@ -99,7 +99,8 @@ CONSTRUCTOR
         dbms_lob.createtemporary(node_data, FALSE, dbms_lob.call);
         -- Piecewise fetching of the LONG column into VARCHAR2 buffer
         LOOP
-            dbms_sql.column_value_long( iv_dbms_sql_cursor ,3 --position of LONG column in cursor's SELECT list
+            dbms_sql.column_value_long( iv_dbms_sql_cursor ,3 --position of LONG column in cursor's
+            -- SELECT list
             ,lv_buf_len ,lv_offset ,lv_buf_val ,lv_bytes_returned );
             EXIT
         WHEN lv_bytes_returned = 0;
@@ -122,7 +123,11 @@ MEMBER PROCEDURE define_columns(
         -- INT column
         dbms_sql.define_column( iv_dbms_sql_cursor ,1 ,node_id );
         -- VARCHAR2 column
-        dbms_sql.define_column( iv_dbms_sql_cursor ,2 ,node_name ,2000 -- character length of node_name's data type
+        dbms_sql.define_column( --
+        iv_dbms_sql_cursor      --cursor ID
+        ,2                      -- column position, starting at 1
+        ,node_name              -- value of the column being defined
+        ,4000                   -- Max. size in bytes for VARCHAR2 columns
         );
         -- LONG column
         dbms_sql.define_column_long( iv_dbms_sql_cursor ,3 );
@@ -191,6 +196,15 @@ AS
             iv_name_column_name VARCHAR2 ,
             iv_long_column_name VARCHAR2 )
         RETURN z_idmwu_clob_tab PIPELINED;
+    /**
+    * Public function FILTER_READ_SOURCE_PTF
+    * @param IV_SEARCH_TERM     (optional) string to search for
+    * @return                   table of ID name and CLOB data
+    */
+    FUNCTION filter_read_source_ptf(
+            iv_search_term VARCHAR2 )
+        RETURN z_idmwu_clob_tab pipelined;
+    PROCEDURE my_test();
 END z_idmwu;
 /
 --------------------------------------------------------
@@ -198,12 +212,21 @@ END z_idmwu;
 --------------------------------------------------------
 CREATE OR REPLACE PACKAGE BODY z_idmwu
 AS
+    PROCEDURE my_test()
+    AS
+    BEGIN
+        FOR lo_test IN
+        (
+            SELECT *
+            FROM TABLE(filter_read_source_ptf(NULL) ) LOOP NULL;
+        END LOOP;
+    END my_test;
     FUNCTION base64_decode(
             iv_base64 CLOB )
         RETURN CLOB
     AS
         lv_result CLOB;
-        lv_substring VARCHAR2(4000 byte);
+        lv_substring VARCHAR2(2000 CHAR);
         lv_num_chars_to_read PLS_INTEGER   := 0;
         lv_offset PLS_INTEGER              := 1;
         lv_num_chars_remaining PLS_INTEGER := 0;
@@ -213,13 +236,18 @@ AS
         dbms_lob.createtemporary(lv_result, FALSE, dbms_lob.call);
         WHILE lv_num_chars_remaining > 0
         LOOP
-            lv_num_chars_to_read   := least(lv_num_chars_remaining, 2000);
+            lv_num_chars_to_read := least(lv_num_chars_remaining, 2000);
+            --TODO: this could be improved by not supplying parameter 2 (amount)
             lv_substring           := dbms_lob.substr( iv_base64 ,lv_num_chars_to_read ,lv_offset );
             lv_offset              := lv_offset              + lv_num_chars_to_read;
             lv_num_chars_remaining := lv_num_chars_remaining - lv_num_chars_to_read;
             -- Concatentation operator vs. dbms_lob.append
             -- performed the same in my tests on 11g
-            lv_result := lv_result || utl_raw.cast_to_varchar2( utl_encode.base64_decode( utl_raw.cast_to_raw(lv_substring) ) );
+            lv_result := lv_result || utl_raw.cast_to_varchar2( --
+            utl_encode.base64_decode(                           --
+            utl_raw.cast_to_raw(lv_substring)                   --
+            )                                                   -- utl_encode.base64_decode
+            );                                                  --utl_raw.cast_to_varchar2
         END LOOP;
         RETURN lv_result;
     END base64_decode;
@@ -235,7 +263,8 @@ AS
         lv_execute_rc PLS_INTEGER;
         lo_clob_object z_idmwu_clob_obj;
     BEGIN
-        lv_query := 'SELECT ' || iv_id_column_name || ', ' || iv_name_column_name || ', ' || iv_long_column_name || ' FROM ' || iv_table_name ;
+        lv_query := 'SELECT ' || iv_id_column_name || ', ' || iv_name_column_name || ', ' ||
+        iv_long_column_name || ' FROM ' || iv_table_name ;
         -- Create cursor, parse and bind
         lv_dbms_sql_cursor := dbms_sql.open_cursor();
         dbms_sql.parse(lv_dbms_sql_cursor, lv_query, dbms_sql.native);
@@ -244,30 +273,11 @@ AS
         lo_clob_object.define_columns(lv_dbms_sql_cursor);
         -- Execute
         lv_execute_rc := dbms_sql.execute(lv_dbms_sql_cursor);
-        -- ============================================================
-        -- UNCOMMENT FOR DEBUGGING ONLY
-        -- and ensure buffer for DBMS output is large enough
-        -- ============================================================
-        -- dbms_output.put_line('Cursor executed, RC=' || lv_execute_rc);
-        -- ============================================================
         -- Fetch all rows, pipe each back
         WHILE dbms_sql.fetch_rows(lv_dbms_sql_cursor) > 0
         LOOP
             lo_clob_object := z_idmwu_clob_obj(lv_dbms_sql_cursor);
             PIPE ROW(lo_clob_object);
-            -- ============================================================
-            -- UNCOMMENT FOR DEBUGGING ONLY
-            -- and ensure buffer for DBMS output is large enough
-            -- ============================================================
-            -- dbms_output.put_line(
-            --     'Piped back table='
-            --     || iv_table_name
-            --     || ' ,node_id='
-            --     || lo_clob_object.node_id
-            --     || ', node_name='
-            --     || lo_clob_object.node_name
-            -- );
-            -- ============================================================
         END LOOP;
         dbms_sql.close_cursor(lv_dbms_sql_cursor);
     EXCEPTION
@@ -277,5 +287,39 @@ AS
         END IF;
         RAISE;
     END read_tab_with_long_col_ptf;
+    FUNCTION filter_read_source_ptf(
+            iv_search_term VARCHAR2 )
+        RETURN z_idmwu_clob_tab PIPELINED
+    AS
+        lo_clob_object z_idmwu_clob_obj;
+    BEGIN
+        lo_clob_object := z_idmwu_clob_obj();
+        FOR ls_source IN
+        (
+            SELECT *
+            FROM user_source a
+            INNER JOIN user_objects b
+            ON  a.name=b.object_name
+            AND a.type=b.object_type
+            ORDER BY a.type
+              ,a.name
+              ,a.line
+        )
+        LOOP
+            -- Case 1: start of new object id
+            IF ls_source.object_id <> lo_clob_object.node_id THEN
+                -- Case 1a: have lo_clob_object from previous group of source lines
+                IF lo_clob_object.node_id IS NOT NULL THEN
+                    pipe row(lo_clob_object);
+                END IF;
+                -- Initialize CLOB object to new group of source lines
+                lo_clob_object.node_id   := ls_source.object_id;
+                lo_clob_object.node_name := ls_source.name;
+                dbms_lob.createtemporary(lo_clob_object.node_data, FALSE, dbms_lob.call);
+            END IF; --Case 1
+            --All cases: append current text line to CLOB
+            dbms_lob.writeappend(lo_clob_object.node_data, LENGTH(ls_source.text), ls_source_text);
+        END LOOP;
+    END filter_read_source_ptf;
 END z_idmwu;
 /
