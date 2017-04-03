@@ -217,7 +217,7 @@ AS
         FOR lo_test IN
         (
             SELECT *
-            FROM TABLE(filter_read_source_ptf(null) ) 
+            FROM TABLE(filter_read_source_ptf('semaphore') ) 
         --  where rownum < 100 
         )
         LOOP
@@ -323,6 +323,9 @@ AS
     AS
         lo_clob_object z_idmwu_clob_obj;
     BEGIN
+         -- Create object once; will be re-used for all iterations
+        lo_clob_object := NEW z_idmwu_clob_obj();
+   
         FOR ls_source IN
         (
             SELECT *
@@ -340,7 +343,7 @@ AS
             ORDER BY a.type
               ,a.name
               ,a.line
-        )
+        )      
         LOOP
             -- If continuation of source object
             IF ls_source.object_id = lo_clob_object.node_id THEN
@@ -352,7 +355,7 @@ AS
             -- New source object
             ELSE
                 -- Pipe final source object unless null
-                IF lo_clob_object IS NOT NULL THEN
+                IF lo_clob_object.node_data IS NOT NULL THEN
                     if iv_search_term is not null then
                         if instr(lo_clob_object.node_data, iv_search_term) > 0 then
                             PIPE ROW(lo_clob_object);
@@ -361,15 +364,22 @@ AS
                         PIPE ROW(lo_clob_object);
                     end if;
                 END IF;
-                
-                lo_clob_object := NEW z_idmwu_clob_obj();
+
                 lo_clob_object.node_id := ls_source.object_id;
                 lo_clob_object.node_name := ls_source.name;
-                dbms_lob.createtemporary(
-                    lo_clob_object.node_data
-                    , FALSE
-                    , dbms_lob.call
-                );
+                -- If first run: create temporary CLOB
+                if lo_clob_object.node_data is not null then
+                    dbms_lob.trim(lo_clob_object.node_data, 0);
+                -- Otherwise truncate existing CLOB
+                else
+                    dbms_lob.createtemporary(
+                        lo_clob_object.node_data
+                        , FALSE
+                        , dbms_lob.call
+                    );
+                end if;
+                
+                -- Append text of current source line
                 dbms_lob.writeappend(
                     lo_clob_object.node_data
                     , LENGTH(ls_source.text)
