@@ -45,18 +45,6 @@ exception
 end;
 /
 begin
-    execute immediate 'DROP TYPE z_idmwu_clob_obj';
-    dbms_output.put_line('Object type dropped');
-exception 
-    when others then
-        if sqlcode != -4043 then
-            raise;
-        else
-            dbms_output.put_line('Object type not found, nothing to do');
-        end if;
-end;
-/
-begin
     execute immediate 'DROP TYPE z_idmwu_clob_tab';
     dbms_output.put_line('Table type dropped');
 exception 
@@ -65,6 +53,18 @@ exception
             raise;
         else
             dbms_output.put_line('Table type not found, nothing to do');
+        end if;
+end;
+/
+begin
+    execute immediate 'DROP TYPE z_idmwu_clob_obj';
+    dbms_output.put_line('Object type dropped');
+exception 
+    when others then
+        if sqlcode != -4043 then
+            raise;
+        else
+            dbms_output.put_line('Object type not found, nothing to do');
         end if;
 end;
 /
