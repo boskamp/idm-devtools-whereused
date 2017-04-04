@@ -217,15 +217,13 @@ AS
         FOR lo_test IN
         (
             SELECT *
-            FROM TABLE(filter_read_source_ptf('semaphore') ) 
+            FROM TABLE(filter_read_source_ptf('idmwu') ) 
         --  where rownum < 100 
         )
         LOOP
             dbms_output.put_line(
                 'NODE_ID: ' 
-                || cast(lo_test.node_id as VARCHAR2)
-                || ' ,NODE_NAME: '
-                || lo_test.node_name);
+                || cast(lo_test.node_id as VARCHAR2));
         END LOOP;
     END my_test;
     FUNCTION base64_decode(
@@ -322,82 +320,45 @@ AS
         RETURN z_idmwu_clob_tab PIPELINED
     AS
         lo_clob_object z_idmwu_clob_obj;
+        lv_object_type user_objects.object_type%TYPE;
     BEGIN
-         -- Create object once; will be re-used for all iterations
-        lo_clob_object := NEW z_idmwu_clob_obj();
-   
         FOR ls_source IN
         (
-            SELECT *
-            FROM user_source a
-            INNER JOIN user_objects b
-            ON  a.name=b.object_name
-            AND a.type=b.object_type
-            where b.object_id in (
-                SELECT distinct b.object_id
-                FROM user_source a
-                INNER JOIN user_objects b
-                ON  a.name=b.object_name
-                AND a.type=b.object_type 
-                WHERE a.text like '%'||upper(iv_search_term)||'%' )
-            ORDER BY a.type
-              ,a.name
-              ,a.line
+            SELECT DISTINCT a.object_id
+            ,a.object_type
+            ,a.object_name
+            FROM user_objects a
+            INNER JOIN user_source b
+            ON  a.object_name=b.name
+            AND a.object_type=b.type
+            --Case insensitive pre-select only source objects
+            --containing the input search term.
+            --Note that string || null results in string on Oracle,
+            --so this works fine with null input.
+            WHERE upper(b.text) LIKE '%'||upper(iv_search_term)||'%'
         )      
         LOOP
-            -- If continuation of source object
-            IF ls_source.object_id = lo_clob_object.node_id THEN
-                dbms_lob.writeappend(
-                    lo_clob_object.node_data
-                    , LENGTH(ls_source.text)
-                    , ls_source.text
-                );
-            -- New source object
-            ELSE
-                -- Pipe final source object unless null
-                IF lo_clob_object.node_data IS NOT NULL THEN
-                    if iv_search_term is not null then
-                        if instr(lo_clob_object.node_data, iv_search_term) > 0 then
-                            PIPE ROW(lo_clob_object);
-                        end if;
-                    else
-                        PIPE ROW(lo_clob_object);
-                    end if;
-                END IF;
+            lo_clob_object := NEW z_idmwu_clob_obj();
+            lo_clob_object.node_id := ls_source.object_id;
+            lo_clob_object.node_name := ls_source.object_name;
 
-                lo_clob_object.node_id := ls_source.object_id;
-                lo_clob_object.node_name := ls_source.name;
-                -- If first run: create temporary CLOB
-                if lo_clob_object.node_data is not null then
-                    dbms_lob.trim(lo_clob_object.node_data, 0);
-                -- Otherwise truncate existing CLOB
-                else
-                    dbms_lob.createtemporary(
-                        lo_clob_object.node_data
-                        , FALSE
-                        , dbms_lob.call
-                    );
-                end if;
-                
-                -- Append text of current source line
-                dbms_lob.writeappend(
-                    lo_clob_object.node_data
-                    , LENGTH(ls_source.text)
-                    , ls_source.text
-                );
-                
-            END IF;
+            --USER_OBJECTS.OBJECT_TYPE contains spaces for some object types,
+            --such as "PACKAGE BODY" and "TYPE BODY". The actual object type
+            --expected by DBMS_METADATA uses underscore as a separator, though.
+            --See https://docs.oracle.com/cd/B19306_01/appdev.102/b14258/d_metada.htm#i997127
+            lv_object_type := replace(ls_source.object_type, ' ', '_');
             
+            lo_clob_object.node_data := dbms_metadata.get_ddl(
+                object_type => lv_object_type
+                ,name => ls_source.object_name 
+            );
+            PIPE ROW(lo_clob_object);            
         END LOOP;
 
         --Pipe last row collected by loop, if any
-        if iv_search_term is not null then
-            if instr(lo_clob_object.node_data, iv_search_term) > 0 then
-                PIPE ROW(lo_clob_object);
-            end if;
-        else
+        IF lo_clob_object IS NOT NULL THEN
             PIPE ROW(lo_clob_object);
-        end if;
+        END IF;
 
     END filter_read_source_ptf;
 END z_idmwu;
