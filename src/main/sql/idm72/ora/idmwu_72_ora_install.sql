@@ -214,54 +214,76 @@ AS
     PROCEDURE my_test
     AS
     BEGIN
-        FOR lo_test IN
+        if 1 = 0 then
+            FOR lo_test IN
+            (
+                SELECT *
+                FROM TABLE(filter_read_source_ptf('idmwu') ) 
+            --  where rownum < 100 
+            )
+            LOOP
+                dbms_output.put_line(
+                    'NODE_ID: ' 
+                    || cast(lo_test.node_id as VARCHAR2));
+            END LOOP;
+        end if;
+        
+        for ls_test in 
         (
-            SELECT *
-            FROM TABLE(filter_read_source_ptf('idmwu') ) 
-        --  where rownum < 100 
+            select
+                scriptname
+                ,base64_decode( scriptdefinition )
+            from mc_global_scripts
+            where scriptname='sap_abap_getNameOfAssignedPendingPrivileges'
         )
-        LOOP
+        loop
             dbms_output.put_line(
-                'NODE_ID: ' 
-                || cast(lo_test.node_id as VARCHAR2));
-        END LOOP;
+                N'Script: ' || ls_test.scriptname
+            );
+        end loop;
     END my_test;
     FUNCTION base64_decode(
             iv_base64 CLOB )
         RETURN CLOB
     AS
         lv_result CLOB;
-        lv_substring VARCHAR2(2000 CHAR);
-        lv_num_chars_to_read PLS_INTEGER   := 0;
-        lv_offset PLS_INTEGER              := 1;
-        lv_num_chars_remaining PLS_INTEGER := 0;
+        lv_substring VARCHAR2(32767 byte);
+        lv_buffer varchar2(32767 byte);
+        lv_offset PLS_INTEGER := 1;
+        lv_len pls_integer := length( iv_base64 );
     BEGIN
-        lv_num_chars_remaining := LENGTH(iv_base64) - lv_offset + 1;
         -- Create CLOB that will not be cached and free'd after this call
         dbms_lob.createtemporary(lv_result, FALSE, dbms_lob.call);
-        WHILE lv_num_chars_remaining > 0
-        LOOP
-            lv_num_chars_to_read := least(lv_num_chars_remaining, 2000);
 
-            --TODO: this could be improved by not supplying parameter 2 (amount)
+        --If input starts with {B64}, ignore this prefix
+        if instr(iv_base64, '{B64}') = 1 then
+            lv_offset := lv_offset + length('{B64}');
+        end if;
+        
+        WHILE not lv_offset > lv_len 
+        LOOP
             lv_substring := dbms_lob.substr(
-                iv_base64
-                ,lv_num_chars_to_read
-                ,lv_offset
+                lob_loc => iv_base64
+                --,amount => lv_num_chars_to_read
+                ,offset => lv_offset
              );
 
-            lv_offset              := lv_offset              + lv_num_chars_to_read;
-            lv_num_chars_remaining := lv_num_chars_remaining - lv_num_chars_to_read;
+            lv_offset := lv_offset + length( lv_substring );
 
             -- Concatentation operator vs. dbms_lob.append
             -- performed the same in my tests on 11g
-            lv_result
-                := lv_result
-                || utl_raw.cast_to_varchar2(
+            lv_buffer := utl_raw.cast_to_varchar2(
                        utl_encode.base64_decode(
                            utl_raw.cast_to_raw(lv_substring)
                        )
-                   );
+                   ); 
+
+            dbms_lob.writeappend(
+               lob_loc => lv_result
+               ,amount => length(lv_buffer)
+               ,buffer => lv_buffer
+            );
+
         END LOOP;
         RETURN lv_result;
     END base64_decode;
@@ -324,7 +346,7 @@ AS
     BEGIN
         FOR ls_source IN
         (
-            SELECT DISTINCT a.object_id
+            SELECT distinct a.object_id
             ,a.object_type
             ,a.object_name
             FROM user_objects a
@@ -335,7 +357,7 @@ AS
             --containing the input search term.
             --Note that string || null results in string on Oracle,
             --so this works fine with null input.
-            WHERE upper(b.text) LIKE '%'||upper(iv_search_term)||'%'
+            WHERE upper(b.text) like '%'||upper(iv_search_term)||'%'
         )      
         LOOP
             lo_clob_object := NEW z_idmwu_clob_obj();
@@ -352,13 +374,13 @@ AS
                 object_type => lv_object_type
                 ,name => ls_source.object_name 
             );
-            PIPE ROW(lo_clob_object);            
+            pipe row(lo_clob_object);            
         END LOOP;
 
         --Pipe last row collected by loop, if any
-        IF lo_clob_object IS NOT NULL THEN
-            PIPE ROW(lo_clob_object);
-        END IF;
+        if lo_clob_object is not null then
+                PIPE ROW(lo_clob_object);
+        end if;
 
     END filter_read_source_ptf;
 END z_idmwu;

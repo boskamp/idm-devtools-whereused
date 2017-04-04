@@ -109,7 +109,7 @@
 -- *******************************************************************
 WITH search_term_cte(st) AS
     (
-        SELECT 'YOUR_SEARCH_TERM_HERE' FROM dual
+        SELECT 'mskeyValue' FROM dual
     )
   ,xml_datasource_cte(node_id,node_type,node_name,native_xml) AS
     (
@@ -233,8 +233,8 @@ WITH search_term_cte(st) AS
   ,b64_enc_prefix_cte(node_id, node_type, node_name, b64_enc_prefix, is_xml) AS
     (
         SELECT scriptid
-          ,'S' -- Package script
-            --see  z_idmwu_clob_obj.node_name
+          ,'S' -- Global or package script
+          --See z_idmwu_clob_obj.node_name
           ,cast(scriptname as VARCHAR2(4000 byte))
           ,scriptdefinition
           ,0
@@ -245,40 +245,23 @@ WITH search_term_cte(st) AS
           ,node_name
           ,node_data
           ,1
-        FROM TABLE(                             --
-            z_idmwu.read_tab_with_long_col_ptf( --
-            'MC_JOBS'                           --iv_tab_name
-            ,'JOBID'                            -- iv_id_column_name
-            ,'NAME'                             --iv_name_colun_name
-            ,'JOBDEFINITION'                    --iv_long_column_name
-            )                                   --z_idmwu.read_tab_with_long_col_ptf
-            )                                   --table
-    )
-  ,b64_enc_cte(node_id, node_type, node_name, b64_enc,is_xml) AS
-    (
-        SELECT node_id
-          ,node_type
-          ,node_name
-            -- SUBSTR returns datatype of arg1 (CLOB in this case)
-          ,SUBSTR(
-            -- CLOB, so return value will be CLOB
-            b64_enc_prefix --
-            -- LENGTH accepts CHAR, VARCHAR2, NCHAR,
-            -- NVARCHAR2,CLOB, or NCLOB
-            ,LENGTH('{B64}')        + 1               --
-            ,LENGTH(b64_enc_prefix) - LENGTH('{B64}') --
+        FROM TABLE(                            
+            z_idmwu.read_tab_with_long_col_ptf(
+                iv_table_name => 'MC_JOBS'
+                ,iv_id_column_name => 'JOBID'
+                ,iv_name_column_name => 'NAME'
+                ,iv_long_column_name => 'JOBDEFINITION'
             )
-          ,is_xml
-        FROM b64_enc_prefix_cte
+        )
     )
   ,b64_dec_cte(node_id,node_type,node_name,b64_dec,is_xml) AS
     (
         SELECT node_id
           ,node_type
           ,node_name
-          ,z_idmwu.base64_decode(b64_enc)
+          ,z_idmwu.base64_decode(b64_enc_prefix)
           ,is_xml
-        FROM b64_enc_cte
+        FROM b64_enc_prefix_cte
     )
   ,b64_datasource_cte(node_id, node_type, node_name, native_xml) AS
     (
