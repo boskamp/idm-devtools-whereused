@@ -111,7 +111,7 @@ WITH search_term_cte(st) AS
     (
         SELECT 'YOUR_SEARCH_TERM_HERE' FROM dual
     )
-  ,text_datasource_cte(node_id,node_type,node_name,native_xml) AS
+  ,xml_datasource_cte(node_id,node_type,node_name,native_xml) AS
     (
         SELECT a.attr_id
           ,'A' -- Attribute
@@ -217,16 +217,28 @@ WITH search_term_cte(st) AS
             )                  --xmlelement
             ,version '1.0')    --xmlroot
         FROM mxpv_alltaskinfo t
-    )
+)
+  ,text_datasource_cte(node_id,node_type,node_name,native_xml) AS
+  (
+    SELECT node_id
+           ,'P' -- PROCEDURE
+           ,cast(node_name as VARCHAR2(4000 byte))
+           ,sys_xmlgen(node_data, XMLFormat(enclTag => 'ROOT'))
+           from table(
+               z_idmwu.filter_read_source_ptf(
+                   iv_search_term => (select st from search_term_cte)
+               )
+           )
+  )
   ,b64_enc_prefix_cte(node_id, node_type, node_name, b64_enc_prefix, is_xml) AS
     (
-        SELECT mcscriptid
+        SELECT scriptid
           ,'S' -- Package script
-            --see  z_idmwu_clob_type.node_name
-          ,CAST(mcscriptname AS VARCHAR2(4000 byte))
-          ,mcscriptdefinition
+            --see  z_idmwu_clob_obj.node_name
+          ,cast(scriptname as VARCHAR2(4000 byte))
+          ,scriptdefinition
           ,0
-        FROM mc_package_scripts
+        FROM mc_global_scripts
         UNION ALL
         SELECT node_id
           ,'J' -- Job
@@ -289,6 +301,8 @@ WITH search_term_cte(st) AS
     (
         SELECT * FROM b64_datasource_cte
         UNION ALL
+        SELECT * FROM xml_datasource_cte
+        UNION ALL
         SELECT * FROM text_datasource_cte
     )
   ,all_text_cte(node_id, node_type, node_name, match_location_text, match_document) AS
@@ -301,13 +315,11 @@ WITH search_term_cte(st) AS
             match_location_text
           ,native_xml AS match_document
         FROM any_datasource_cte
-          ,xmltable(
-            '        
-for $t in ( $native_xml//attribute::*                   
-,$native_xml/descendant-or-self::text())        
-return $t        
-'
-            PASSING native_xml AS "native_xml" COLUMNS match_location XMLType PATH '.' )
+          ,xmltable('for $t in ( $native_xml//attribute::*                   
+                     ,$native_xml/descendant-or-self::text())        
+                     return $t'
+            PASSING native_xml AS "native_xml"
+            COLUMNS match_location XMLType PATH '.' )
     )
 SELECT *
 FROM all_text_cte
