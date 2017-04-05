@@ -227,7 +227,7 @@ AS
                     || cast(lo_test.node_id as VARCHAR2));
             END LOOP;
         end if;
-        
+        if 1 = 0 then
         for ls_test in 
         (
             select
@@ -238,22 +238,61 @@ AS
         )
         loop
             dbms_output.put_line(
-                N'Script: ' || ls_test.scriptname
+                'Script: ' || ls_test.scriptname
             );
         end loop;
+        end if;
+        
+        for lo_test in 
+        (
+            select
+                node_name
+                ,base64_decode( node_data ) as node_data
+            from table(
+                z_idmwu.read_tab_with_long_col_ptf(
+                     iv_table_name => 'MC_JOBS'
+                    ,iv_id_column_name => 'JOBID'
+                    ,iv_name_column_name => 'NAME'
+                    ,iv_long_column_name => 'JOBDEFINITION'               
+                )
+            )
+            where node_name='00 Generic Test'
+        )
+        loop
+            dbms_output.put_line(
+                'Node name: ' || lo_test.node_name
+            );
+        end loop;
+
     END my_test;
     FUNCTION base64_decode(
             iv_base64 CLOB )
         RETURN CLOB
     AS
-        lv_result CLOB;
-        lv_substring VARCHAR2(32767 byte);
-        lv_buffer varchar2(32767 byte);
+        lv_b64_decoded_binary BLOB;
+        lv_b64_decoded_char CLOB;
         lv_offset PLS_INTEGER := 1;
         lv_len pls_integer := length( iv_base64 );
+        lv_raw_buffer raw(32767);
+        lv_varchar2_buffer varchar2(32767);
+        lv_dest_offset integer := 1;
+        lv_src_offset integer := 1;
+        lv_lang_context integer := dbms_lob.default_lang_ctx;
+        lv_warning integer;
     BEGIN
-        -- Create CLOB that will not be cached and free'd after this call
-        dbms_lob.createtemporary(lv_result, FALSE, dbms_lob.call);
+        -- Create LOB as buffer for BASE64-decoded binary data
+         dbms_lob.createtemporary(
+            lob_loc => lv_b64_decoded_binary
+            ,cache => FALSE
+            ,dur => dbms_lob.call
+        );
+        
+        -- Create CLOB for overall result
+        dbms_lob.createtemporary(
+            lob_loc => lv_b64_decoded_char
+            ,cache => FALSE
+            ,dur => dbms_lob.call
+        );
 
         --If input starts with {B64}, ignore this prefix
         if instr(iv_base64, '{B64}') = 1 then
@@ -262,30 +301,38 @@ AS
         
         WHILE not lv_offset > lv_len 
         LOOP
-            lv_substring := dbms_lob.substr(
+            lv_varchar2_buffer := dbms_lob.substr(
                 lob_loc => iv_base64
-                --,amount => lv_num_chars_to_read
+                --,amount => 
                 ,offset => lv_offset
              );
 
-            lv_offset := lv_offset + length( lv_substring );
+            lv_offset := lv_offset + length( lv_varchar2_buffer );
 
-            -- Concatentation operator vs. dbms_lob.append
-            -- performed the same in my tests on 11g
-            lv_buffer := utl_raw.cast_to_varchar2(
-                       utl_encode.base64_decode(
-                           utl_raw.cast_to_raw(lv_substring)
-                       )
-                   ); 
+            lv_raw_buffer := utl_encode.base64_decode(utl_raw.cast_to_raw(lv_varchar2_buffer));
 
             dbms_lob.writeappend(
-               lob_loc => lv_result
-               ,amount => length(lv_buffer)
-               ,buffer => lv_buffer
+               lob_loc => lv_b64_decoded_binary
+               ,amount => utl_raw.length(lv_raw_buffer)
+               ,buffer => lv_raw_buffer
             );
-
+            
         END LOOP;
-        RETURN lv_result;
+        
+        dbms_lob.converttoclob(
+            dest_lob => lv_b64_decoded_char
+            ,src_blob => lv_b64_decoded_binary
+            ,amount => dbms_lob.lobmaxsize
+            ,dest_offset => lv_dest_offset
+            ,src_offset => lv_src_offset
+            ,blob_csid => nls_charset_id('AL32UTF8')
+            ,lang_context => lv_lang_context
+            ,warning => lv_warning
+        );
+        
+        dbms_lob.freetemporary( lob_loc => lv_b64_decoded_binary );
+        
+        RETURN lv_b64_decoded_char;
     END base64_decode;
 
     FUNCTION read_tab_with_long_col_ptf(
