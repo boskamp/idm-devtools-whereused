@@ -109,9 +109,37 @@
 -- *******************************************************************
 WITH search_term_cte(st) AS
     (
-        SELECT 'mskeyValue' FROM dual
+        SELECT 'MSKEYVALUE' FROM dual
     )
-  ,xml_datasource_cte(node_id,node_type,node_name,native_xml) AS
+ ,all_jobs_as_one_row_cte as (
+    select xmltype(
+        dbms_xmlgen.getxml(q'{
+            select jobid
+                   ,name
+                   ,jobdefinition 
+                   from mc_jobs 
+                   where jobdefinition is not null
+            }')--getxml
+    ) as xml from dual
+)
+,one_job_per_row_cte as (
+    select 
+        cast(extractvalue(
+                xs.object_value
+                , '/ROW/JOBID'
+            ) as int) as node_id
+        ,cast(extractvalue(
+                xs.object_value
+                , '/ROW/NAME'
+            ) as VARCHAR2(4000 byte)) as node_name
+        ,extract(
+                xs.object_value
+                , '/ROW/JOBDEFINITION/text()'
+            ).getclobval() as node_data
+        from all_jobs_as_one_row_cte x
+        cross join table(xmlsequence(extract(x.xml, '/ROWSET/ROW'))) xs
+)
+,xml_datasource_cte(node_id,node_type,node_name,native_xml) AS
     (
         SELECT a.attr_id
           ,'A' -- Attribute
@@ -241,27 +269,36 @@ WITH search_term_cte(st) AS
         FROM mc_global_scripts
         UNION ALL
         SELECT node_id
-          ,'J' -- Job
+          ,'J' --Job
           ,node_name
           ,node_data
           ,1
-        FROM TABLE(                            
-            z_idmwu.read_tab_with_long_col_ptf(
-                iv_table_name => 'MC_JOBS'
-                ,iv_id_column_name => 'JOBID'
-                ,iv_name_column_name => 'NAME'
-                ,iv_long_column_name => 'JOBDEFINITION'
-            )
-        )
+          from one_job_per_row_cte
     )
-  ,b64_dec_cte(node_id,node_type,node_name,b64_dec,is_xml) AS
+,b64_enc_cte(node_id, node_type, node_name, b64_enc,is_xml) AS (
+SELECT
+    node_id
+    ,node_type
+    ,node_name
+    -- SUBSTR returns datatype of arg1 (CLOB in this case)
+    ,substr(
+        -- CLOB, so return value will be CLOB
+        b64_enc_prefix
+        -- LENGTH accepts CHAR, VARCHAR2, NCHAR,
+        -- NVARCHAR2,CLOB, or NCLOB
+        ,length('{B64}') + 1
+        ,length(b64_enc_prefix) - length('{B64}')
+    )
+    ,is_xml
+    FROM b64_enc_prefix_cte
+)  ,b64_dec_cte(node_id,node_type,node_name,b64_dec,is_xml) AS
     (
         SELECT node_id
           ,node_type
           ,node_name
-          ,z_idmwu.base64_decode(b64_enc_prefix)
+          ,z_idmwu.base64_decode_new(b64_enc)
           ,is_xml
-        FROM b64_enc_prefix_cte
+        FROM b64_enc_cte
     )
   ,b64_datasource_cte(node_id, node_type, node_name, native_xml) AS
     (
@@ -304,6 +341,7 @@ WITH search_term_cte(st) AS
             PASSING native_xml AS "native_xml"
             COLUMNS match_location XMLType PATH '.' )
     )
+    /*
 SELECT *
 FROM all_text_cte
 WHERE instr( upper(match_location_text) ,upper(
@@ -313,3 +351,5 @@ WHERE instr( upper(match_location_text) ,upper(
     )) <> 0
 ORDER BY node_type
   , node_id ;
+*/
+select * from b64_dec_cte where node_type='J';
