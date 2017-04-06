@@ -109,36 +109,8 @@
 -- *******************************************************************
 WITH search_term_cte(st) AS
     (
-        SELECT 'MSKEYVALUE' FROM dual
+        SELECT 'YOUR_SEARCH_TERM_HERE' FROM dual
     )
- ,all_jobs_as_one_row_cte as (
-    select xmltype(
-        dbms_xmlgen.getxml(q'{
-            select jobid
-                   ,name
-                   ,jobdefinition 
-                   from mc_jobs 
-                   where jobdefinition is not null
-            }')--getxml
-    ) as xml from dual
-)
-,one_job_per_row_cte as (
-    select 
-        cast(extractvalue(
-                xs.object_value
-                , '/ROW/JOBID'
-            ) as int) as node_id
-        ,cast(extractvalue(
-                xs.object_value
-                , '/ROW/NAME'
-            ) as VARCHAR2(4000 byte)) as node_name
-        ,extract(
-                xs.object_value
-                , '/ROW/JOBDEFINITION/text()'
-            ).getclobval() as node_data
-        from all_jobs_as_one_row_cte x
-        cross join table(xmlsequence(extract(x.xml, '/ROWSET/ROW'))) xs
-)
 ,xml_datasource_cte(node_id,node_type,node_name,native_xml) AS
     (
         SELECT a.attr_id
@@ -251,7 +223,11 @@ WITH search_term_cte(st) AS
     SELECT node_id
            ,'P' -- PROCEDURE
            ,cast(node_name as VARCHAR2(4000 byte))
-           ,sys_xmlgen(node_data, XMLFormat(enclTag => 'ROOT'))
+           --Using a CDATA section to wrap DDL source code is a workaround
+           --for sys_xmlgen's failure to properly encode some Unicode characters
+           --that occur in the DDL like U+009A or U+00A0. Without CDATA section,
+           --these would result in ORA-31011 during XML parsing.
+           ,sys_xmlgen(xmlcdata(node_data), XMLFormat(enclTag => 'ROOT'))
            from table(
                z_idmwu.filter_read_source_ptf(
                    iv_search_term => (select st from search_term_cte)
@@ -267,13 +243,20 @@ WITH search_term_cte(st) AS
           ,scriptdefinition
           ,0
         FROM mc_global_scripts
-        UNION ALL
-        SELECT node_id
-          ,'J' --Job
-          ,node_name
-          ,node_data
-          ,1
-          from one_job_per_row_cte
+        UNION ALL SELECT
+            node_id
+            ,'J' -- Job
+            ,node_name
+            ,node_data
+            ,1
+            FROM table(
+                z_idmwu.read_tab_with_long_col_ptf(
+                    'MC_JOBS'        --iv_tab_name
+                    ,'JOBID'         --iv_id_column_name
+                    ,'NAME'          --iv_name_colun_name
+                    ,'JOBDEFINITION' --iv_long_column_name
+                )
+            )
     )
 ,b64_enc_cte(node_id, node_type, node_name, b64_enc,is_xml) AS (
 SELECT
@@ -296,7 +279,7 @@ SELECT
         SELECT node_id
           ,node_type
           ,node_name
-          ,z_idmwu.base64_decode_new(b64_enc)
+          ,z_idmwu.base64_decode(b64_enc)
           ,is_xml
         FROM b64_enc_cte
     )
@@ -311,11 +294,13 @@ SELECT
                 ELSE sys_xmlgen(b64_dec, XMLFormat(enclTag => 'ROOT'))
             END
         FROM b64_dec_cte
-        WHERE instr(upper(b64_dec), upper(
-            (
-                SELECT st FROM search_term_cte
-            )
-            )) <> 0
+        WHERE 
+            case 
+                when (select st from search_term_cte) is not null
+                    then instr(upper(b64_dec)
+                               ,upper((SELECT st FROM search_term_cte)))
+                else 1
+            end > 0
     )
   ,any_datasource_cte(node_id, node_type, node_name, native_xml) AS
     (
@@ -330,9 +315,12 @@ SELECT
         SELECT node_id
           ,node_type
           ,node_name
-            -- magic number 1 is the value of dbms_xmlgen.entity_decode
-          ,dbms_xmlgen.convert( extract(match_location,'.').getCLOBVal() , 1 ) AS
-            match_location_text
+            -- Magic number 1 is the value of the documented,
+            -- but non-existing constant dbms_xmlgen.entity_decode
+          ,dbms_xmlgen.convert( 
+              xmldata => extract(match_location,'.').getCLOBVal() 
+              ,flag => 1 ) 
+           AS match_location_text
           ,native_xml AS match_document
         FROM any_datasource_cte
           ,xmltable('for $t in ( $native_xml//attribute::*                   
@@ -341,15 +329,13 @@ SELECT
             PASSING native_xml AS "native_xml"
             COLUMNS match_location XMLType PATH '.' )
     )
-    /*
 SELECT *
-FROM all_text_cte
-WHERE instr( upper(match_location_text) ,upper(
-    (
-        SELECT st FROM search_term_cte
-    )
-    )) <> 0
-ORDER BY node_type
-  , node_id ;
-*/
-select * from b64_dec_cte where node_type='J';
+    FROM all_text_cte
+    WHERE 
+        case 
+            when (select st from search_term_cte) is not null
+                then instr(upper(match_location_text)
+                           ,upper((SELECT st FROM search_term_cte)))
+            else 1
+        end > 0
+    ORDER BY node_type, node_id;

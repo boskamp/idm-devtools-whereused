@@ -36,10 +36,12 @@
 --           SAP(R) IDM as OPER user (MXMC_OPER, by default).
 --
 -- ========================================================================
+-- NEW
 --------------------------------------------------------
---  DDL for Type z_idmwu_clob_obj
+--  DDL for Type Z_IDMWU_CLOB_OBJ
 --------------------------------------------------------
-CREATE OR REPLACE TYPE z_idmwu_clob_obj AUTHID CURRENT_USER
+
+  CREATE OR REPLACE TYPE Z_IDMWU_CLOB_OBJ AUTHID CURRENT_USER
 AS
     OBJECT
     (
@@ -59,8 +61,9 @@ AS
             RESULT ,
             MEMBER PROCEDURE define_columns(
                     iv_dbms_sql_cursor IN INTEGER) );
-                                        /
-CREATE OR REPLACE TYPE BODY z_idmwu_clob_obj
+                                        
+/
+CREATE OR REPLACE TYPE BODY Z_IDMWU_CLOB_OBJ
 AS
     /**
     * Constructor. Sets all attributes to NULL.
@@ -99,14 +102,25 @@ CONSTRUCTOR
         dbms_lob.createtemporary(node_data, FALSE, dbms_lob.call);
         -- Piecewise fetching of the LONG column into VARCHAR2 buffer
         LOOP
-            dbms_sql.column_value_long( iv_dbms_sql_cursor ,3 --position of LONG column in cursor's
-            -- SELECT list
-            ,lv_buf_len ,lv_offset ,lv_buf_val ,lv_bytes_returned );
-            EXIT
-        WHEN lv_bytes_returned = 0;
-            -- Concatentation operator vs. dbms_lob.append
-            -- performed the same in my tests on 11g
-            node_data := node_data || lv_buf_val;
+            dbms_sql.column_value_long( 
+                c => iv_dbms_sql_cursor 
+                ,position => 3
+                ,length => lv_buf_len 
+                ,offset => lv_offset 
+                ,value => lv_buf_val 
+                ,value_length => lv_bytes_returned 
+            );
+            EXIT WHEN lv_bytes_returned = 0;
+
+            -- Concatentation operator vs. dbms_lob.append?
+            dbms_lob.writeappend(
+                lob_loc => node_data
+                ,amount => lv_bytes_returned
+                ,buffer => lv_buf_val
+            );
+
+            --node_data := node_data || lv_buf_val;
+
             lv_offset := lv_offset + lv_bytes_returned;
         END LOOP;
         RETURN;
@@ -135,7 +149,7 @@ MEMBER PROCEDURE define_columns(
 END;
 /
 --------------------------------------------------------
---  DDL for Type z_idmwu_clob_tab
+--  DDL for Type Z_IDMWU_CLOB_TAB
 --------------------------------------------------------
 CREATE OR REPLACE TYPE Z_IDMWU_CLOB_TAB
 -- =================================================
@@ -144,15 +158,31 @@ CREATE OR REPLACE TYPE Z_IDMWU_CLOB_TAB
 -- =================================================
 -- AUTHID CURRENT_USER
 AS
-    TABLE OF z_idmwu_clob_obj;
+    TABLE OF Z_IDMWU_CLOB_OBJ;
+
 /
 --------------------------------------------------------
---  DDL for Package z_idmwu
+--  DDL for Package Z_IDMWU
 --------------------------------------------------------
-CREATE OR REPLACE PACKAGE z_idmwu AUTHID CURRENT_USER
+CREATE OR REPLACE PACKAGE Z_IDMWU AUTHID CURRENT_USER
 AS
     /**
-    * Public function BASE64_DECODE
+     * Public function BASE64_DECODE
+     *
+     * Special purpose BASE64 decoder which
+     * assumes that the result of decoding is
+     * not just any raw binary data, but charater-like
+     * data which can be represented as a CLOB.
+     *
+     * @param: IV_BASE64 encoded data
+     * @return decoded, character-like data
+     */
+    FUNCTION base64_decode(
+        iv_base64 CLOB
+    )
+    RETURN CLOB;
+    /**
+    * Public function BASE64_DECODE_NEW
     *
     * Special purpose BASE64 decoder which
     * assumes that the result of decoding is
@@ -162,7 +192,7 @@ AS
     * @param: IV_BASE64 encoded data
     * @return decoded, character-like data
     */
-    FUNCTION base64_decode(
+    FUNCTION base64_decode_new(
             iv_base64 CLOB )
         RETURN CLOB;
     /**
@@ -205,81 +235,117 @@ AS
             iv_search_term VARCHAR2 )
         RETURN z_idmwu_clob_tab pipelined;
     PROCEDURE my_test;
-END z_idmwu;
+END Z_IDMWU;
 /
-
-
-CREATE OR REPLACE PACKAGE BODY z_idmwu
+--------------------------------------------------------
+--  DDL for Package Body Z_IDMWU
+--------------------------------------------------------
+CREATE OR REPLACE PACKAGE BODY Z_IDMWU
 AS
     PROCEDURE my_test
     AS
+        lv_char clob;
+        lv_xml xmltype;
+        lv_substr varchar2(4000 byte);
     BEGIN
-        if 1 = 0 then
             FOR lo_test IN
             (
-                SELECT *
-                FROM TABLE(filter_read_source_ptf('idmwu') ) 
-            --  where rownum < 100 
-            )
-            LOOP
-                dbms_output.put_line(
-                    'NODE_ID: ' 
-                    || cast(lo_test.node_id as VARCHAR2));
-            END LOOP;
-        end if;
-        if 1 = 0 then
-        for ls_test in 
-        (
-            select
-                scriptname
-                ,base64_decode( scriptdefinition )
-            from mc_global_scripts
-            where scriptname='sap_abap_getNameOfAssignedPendingPrivileges'
-        )
-        loop
-            dbms_output.put_line(
-                'Script: ' || ls_test.scriptname
-            );
-        end loop;
-        end if;
-        
-        for lo_test in 
-        (
-            select
-                node_name
-                ,base64_decode( node_data ) as node_data
-            from table(
-                z_idmwu.read_tab_with_long_col_ptf(
+            select * from table(
+                read_tab_with_long_col_ptf(
                      iv_table_name => 'MC_JOBS'
                     ,iv_id_column_name => 'JOBID'
                     ,iv_name_column_name => 'NAME'
                     ,iv_long_column_name => 'JOBDEFINITION'               
                 )
-            )
-            where node_name='00 Generic Test'
-        )
-        loop
-            dbms_output.put_line(
-                'Node name: ' || lo_test.node_name
-            );
-        end loop;
-
+           )
+           --where node_name='00 Generic Test'
+           )
+            LOOP
+                lv_char := base64_decode_new(lo_test.node_data);
+                    lv_substr := dbms_lob.substr(
+                    lob_loc => lv_char
+                    ,amount => 1000
+                    ,offset => 1
+                );
+                dbms_output.put_line(lv_substr);
+                
+                select xmlparse(document lv_char) into lv_xml from dual;
+                dbms_output.put_line(
+                    'NODE_ID: ' 
+                    || cast(lo_test.node_id as VARCHAR2));
+            END LOOP;
     END my_test;
-    FUNCTION base64_decode(
+     FUNCTION base64_decode(
+        iv_base64 CLOB
+    )
+    RETURN CLOB
+    AS
+        lv_result               CLOB;
+        lv_substring            VARCHAR2(2000 CHAR);
+        lv_num_chars_to_read    PLS_INTEGER := 0;
+        lv_offset               PLS_INTEGER := 1;
+        lv_num_chars_remaining  PLS_INTEGER := 0;
+    BEGIN
+        --If input starts with {B64}, ignore this prefix
+        --if instr(iv_base64, '{B64}') = 1 then
+        --    lv_offset := lv_offset + length('{B64}');
+        --end if;
+
+        lv_num_chars_remaining := length(iv_base64) - lv_offset + 1;
+
+        -- Create CLOB that will not be cached and free'd after this call
+        dbms_lob.createtemporary(lv_result, FALSE, dbms_lob.call);
+    
+        WHILE lv_num_chars_remaining > 0 LOOP
+     
+            lv_num_chars_to_read := least(lv_num_chars_remaining, 2000);
+     
+            lv_substring := dbms_lob.substr(
+                iv_base64
+                ,lv_num_chars_to_read
+                ,lv_offset
+            );
+     
+            lv_offset := lv_offset + lv_num_chars_to_read;
+     
+            lv_num_chars_remaining
+                := lv_num_chars_remaining - lv_num_chars_to_read;
+
+            -- Concatentation operator vs. dbms_lob.append
+            -- performed the same in my tests on 11g
+            lv_result := lv_result || utl_raw.cast_to_varchar2(
+                    utl_encode.base64_decode(
+                        utl_raw.cast_to_raw(lv_substring)
+                    )
+            );
+        
+            END LOOP;
+     
+        RETURN lv_result;
+  
+    END base64_decode; 
+   
+    FUNCTION base64_decode_new(
             iv_base64 CLOB )
         RETURN CLOB
     AS
         lv_b64_decoded_binary BLOB;
         lv_b64_decoded_char CLOB;
-        lv_offset PLS_INTEGER := 1;
-        lv_len pls_integer := length( iv_base64 );
+        lv_clob_offset integer := 1;
+        lv_clob_len integer := length( iv_base64 );
         lv_raw_buffer raw(32767);
-        lv_varchar2_buffer varchar2(32767);
+        lv_raw_len integer;
+        lv_varchar2_buffer varchar2(32767 byte);
+        lv_varchar2_len integer;
+        lv_divisible_by_4_len integer;
         lv_dest_offset integer := 1;
         lv_src_offset integer := 1;
         lv_lang_context integer := dbms_lob.default_lang_ctx;
-        lv_warning integer;
+        lv_warning integer := dbms_lob.no_warning;
+        lv_blob_csid integer;
     BEGIN
+        select nls_charset_id('AL32UTF8') into lv_blob_csid from dual;
+        
         -- Create LOB as buffer for BASE64-decoded binary data
          dbms_lob.createtemporary(
             lob_loc => lv_b64_decoded_binary
@@ -296,24 +362,39 @@ AS
 
         --If input starts with {B64}, ignore this prefix
         if instr(iv_base64, '{B64}') = 1 then
-            lv_offset := lv_offset + length('{B64}');
+            lv_clob_offset := lv_clob_offset + length('{B64}');
         end if;
         
-        WHILE not lv_offset > lv_len 
+        WHILE NOT lv_clob_offset > lv_clob_len 
         LOOP
             lv_varchar2_buffer := dbms_lob.substr(
                 lob_loc => iv_base64
-                --,amount => 
-                ,offset => lv_offset
+                ,amount => ( lv_clob_len - lv_clob_offset + 1)
+                ,offset => lv_clob_offset
              );
 
-            lv_offset := lv_offset + length( lv_varchar2_buffer );
+            lv_varchar2_len := length( lv_varchar2_buffer );
+            lv_divisible_by_4_len := floor(lv_varchar2_len/4) * 4;
+            
+            if lv_divisible_by_4_len > 0 and lv_varchar2_len > lv_divisible_by_4_len then
+                lv_varchar2_buffer := substr(
+                     lv_varchar2_buffer --char
+                     ,1 --position
+                     ,lv_divisible_by_4_len --substring_length
+                );
+            else
+                -- Handle cases where lv_varchar2_len < 4, end if input
+                lv_divisible_by_4_len := lv_varchar2_len;
+            end if;
+            
+            lv_clob_offset := lv_clob_offset + lv_divisible_by_4_len;
 
             lv_raw_buffer := utl_encode.base64_decode(utl_raw.cast_to_raw(lv_varchar2_buffer));
-
+            lv_raw_len := utl_raw.length(lv_raw_buffer);
+            
             dbms_lob.writeappend(
                lob_loc => lv_b64_decoded_binary
-               ,amount => utl_raw.length(lv_raw_buffer)
+               ,amount => lv_raw_len
                ,buffer => lv_raw_buffer
             );
             
@@ -322,10 +403,10 @@ AS
         dbms_lob.converttoclob(
             dest_lob => lv_b64_decoded_char
             ,src_blob => lv_b64_decoded_binary
-            ,amount => dbms_lob.lobmaxsize
+            ,amount => dbms_lob.getlength(lv_b64_decoded_binary)
             ,dest_offset => lv_dest_offset
             ,src_offset => lv_src_offset
-            ,blob_csid => nls_charset_id('AL32UTF8')
+            ,blob_csid => lv_blob_csid
             ,lang_context => lv_lang_context
             ,warning => lv_warning
         );
@@ -333,7 +414,7 @@ AS
         dbms_lob.freetemporary( lob_loc => lv_b64_decoded_binary );
         
         RETURN lv_b64_decoded_char;
-    END base64_decode;
+    END base64_decode_new;
 
     FUNCTION read_tab_with_long_col_ptf(
             iv_table_name       VARCHAR2 ,
@@ -356,6 +437,9 @@ AS
             || iv_long_column_name
             || ' FROM '
             || iv_table_name
+            || ' WHERE '
+            || iv_long_column_name
+            || ' IS NOT NULL'
             ;
 
          -- Create cursor, parse and bind
@@ -377,11 +461,11 @@ AS
         END LOOP;
         dbms_sql.close_cursor(lv_dbms_sql_cursor);
     EXCEPTION
-    WHEN OTHERS THEN
-        IF dbms_sql.is_open(lv_dbms_sql_cursor) THEN
-            dbms_sql.close_cursor(lv_dbms_sql_cursor);
-        END IF;
-        RAISE;
+        WHEN OTHERS THEN
+            if dbms_sql.is_open(lv_dbms_sql_cursor) THEN
+                dbms_sql.close_cursor(lv_dbms_sql_cursor);
+            end if;
+            RAISE;
     END read_tab_with_long_col_ptf;
 
     FUNCTION filter_read_source_ptf(
@@ -430,5 +514,5 @@ AS
         end if;
 
     END filter_read_source_ptf;
-END z_idmwu;
+END Z_IDMWU;
 /
