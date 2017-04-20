@@ -167,22 +167,7 @@ AS
 CREATE OR REPLACE PACKAGE Z_IDMWU AUTHID CURRENT_USER
 AS
     /**
-     * Public function BASE64_DECODE
-     *
-     * Special purpose BASE64 decoder which
-     * assumes that the result of decoding is
-     * not just any raw binary data, but charater-like
-     * data which can be represented as a CLOB.
-     *
-     * @param: IV_BASE64 encoded data
-     * @return decoded, character-like data
-     */
-    FUNCTION base64_decode(
-        iv_base64 CLOB
-    )
-    RETURN CLOB;
-    /**
-    * Public function BASE64_DECODE_NEW
+    * Public function BASE64_DECODE
     *
     * Special purpose BASE64 decoder which
     * assumes that the result of decoding is
@@ -192,7 +177,7 @@ AS
     * @param: IV_BASE64 encoded data
     * @return decoded, character-like data
     */
-    FUNCTION base64_decode_new(
+    FUNCTION base64_decode(
             iv_base64 CLOB )
         RETURN CLOB;
     /**
@@ -237,9 +222,8 @@ AS
     PROCEDURE my_test;
 END Z_IDMWU;
 /
---------------------------------------------------------
---  DDL for Package Body Z_IDMWU
---------------------------------------------------------
+
+
 CREATE OR REPLACE PACKAGE BODY Z_IDMWU
 AS
     PROCEDURE my_test
@@ -261,7 +245,7 @@ AS
            --where node_name='00 Generic Test'
            )
             LOOP
-                lv_char := base64_decode_new(lo_test.node_data);
+                lv_char := base64_decode(lo_test.node_data);
                     lv_substr := dbms_lob.substr(
                     lob_loc => lv_char
                     ,amount => 1000
@@ -275,57 +259,8 @@ AS
                     || cast(lo_test.node_id as VARCHAR2));
             END LOOP;
     END my_test;
-     FUNCTION base64_decode(
-        iv_base64 CLOB
-    )
-    RETURN CLOB
-    AS
-        lv_result               CLOB;
-        lv_substring            VARCHAR2(2000 CHAR);
-        lv_num_chars_to_read    PLS_INTEGER := 0;
-        lv_offset               PLS_INTEGER := 1;
-        lv_num_chars_remaining  PLS_INTEGER := 0;
-    BEGIN
-        --If input starts with {B64}, ignore this prefix
-        --if instr(iv_base64, '{B64}') = 1 then
-        --    lv_offset := lv_offset + length('{B64}');
-        --end if;
-
-        lv_num_chars_remaining := length(iv_base64) - lv_offset + 1;
-
-        -- Create CLOB that will not be cached and free'd after this call
-        dbms_lob.createtemporary(lv_result, FALSE, dbms_lob.call);
-    
-        WHILE lv_num_chars_remaining > 0 LOOP
-     
-            lv_num_chars_to_read := least(lv_num_chars_remaining, 2000);
-     
-            lv_substring := dbms_lob.substr(
-                iv_base64
-                ,lv_num_chars_to_read
-                ,lv_offset
-            );
-     
-            lv_offset := lv_offset + lv_num_chars_to_read;
-     
-            lv_num_chars_remaining
-                := lv_num_chars_remaining - lv_num_chars_to_read;
-
-            -- Concatentation operator vs. dbms_lob.append
-            -- performed the same in my tests on 11g
-            lv_result := lv_result || utl_raw.cast_to_varchar2(
-                    utl_encode.base64_decode(
-                        utl_raw.cast_to_raw(lv_substring)
-                    )
-            );
-        
-            END LOOP;
-     
-        RETURN lv_result;
-  
-    END base64_decode; 
    
-    FUNCTION base64_decode_new(
+    FUNCTION base64_decode(
             iv_base64 CLOB )
         RETURN CLOB
     AS
@@ -343,6 +278,7 @@ AS
         lv_lang_context integer := dbms_lob.default_lang_ctx;
         lv_warning integer := dbms_lob.no_warning;
         lv_blob_csid integer;
+        lv_amount integer;
     BEGIN
         select nls_charset_id('AL32UTF8') into lv_blob_csid from dual;
         
@@ -365,16 +301,18 @@ AS
             lv_clob_offset := lv_clob_offset + length('{B64}');
         end if;
         
-        WHILE NOT lv_clob_offset > lv_clob_len 
+         WHILE NOT lv_clob_offset > lv_clob_len 
         LOOP
+            lv_amount := least(lv_clob_len - lv_clob_offset + 1, 32767);
+            
             lv_varchar2_buffer := dbms_lob.substr(
                 lob_loc => iv_base64
-                ,amount => ( lv_clob_len - lv_clob_offset + 1)
+                ,amount => lv_amount
                 ,offset => lv_clob_offset
              );
 
             lv_varchar2_len := length( lv_varchar2_buffer );
-            lv_divisible_by_4_len := floor(lv_varchar2_len/4) * 4;
+            lv_divisible_by_4_len := floor(lv_varchar2_len/4) * 4;         
             
             if lv_divisible_by_4_len > 0 and lv_varchar2_len > lv_divisible_by_4_len then
                 lv_varchar2_buffer := substr(
@@ -388,7 +326,7 @@ AS
             end if;
             
             lv_clob_offset := lv_clob_offset + lv_divisible_by_4_len;
-
+                      
             lv_raw_buffer := utl_encode.base64_decode(utl_raw.cast_to_raw(lv_varchar2_buffer));
             lv_raw_len := utl_raw.length(lv_raw_buffer);
             
@@ -414,7 +352,7 @@ AS
         dbms_lob.freetemporary( lob_loc => lv_b64_decoded_binary );
         
         RETURN lv_b64_decoded_char;
-    END base64_decode_new;
+    END base64_decode;
 
     FUNCTION read_tab_with_long_col_ptf(
             iv_table_name       VARCHAR2 ,
