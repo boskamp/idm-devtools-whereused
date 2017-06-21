@@ -109,7 +109,7 @@
 -- *******************************************************************
 WITH search_term_cte(st) AS
     (
-        SELECT 'BASF_GMT_USER_REG_ONE_TIME_LINK' FROM dual
+        SELECT 'restidentitycreate' FROM dual
     )
 ,xml_datasource_cte(node_id,node_type,node_name,native_xml) AS
     (
@@ -313,188 +313,8 @@ WITH search_term_cte(st) AS
             PASSING native_xml AS "native_xml"
             COLUMNS match_location XMLType PATH '.' )
     )
-,nodes
-    -- ORA requires a list of column aliases, SQL Server doesn't
-    (node_id, parent_node_id, parent_node_type, node_name, node_type, node_pkg) AS
-    (
-    -- Identity Stores
-    SELECT is_id   AS node_id
-      ,NULL        AS parent_node_id
-      ,NULL        AS parent_node_type
-      ,idstorename AS node_name
-      ,'I'         AS node_type
-      ,null        as node_pkg
-    FROM mxi_idstores
-    -- Top Level Package Folders for Identity Store
-    UNION ALL
-    SELECT group_id AS node_id
-      ,idstore      AS parent_node_id
-      ,'I'          AS parent_node_type
-      ,group_name   AS node_name
-      ,'G'          AS node_type
-      ,mcpackageid  as node_pkg
-    FROM mc_group
-    WHERE provision_group=2 -- package folder
-    AND parent_group    IS NULL
-    AND mcpackageid     IS NULL
-    -- Packages Contained in a Folder
-    UNION ALL
-    SELECT p.mcpackageid AS node_id
-      ,p.mcgroup         AS parent_node_id
-      ,'G'               AS parent_node_type
-      ,p.mcqualifiedname AS node_name
-      ,'P'               AS node_type
-      ,p.mcpackageid     as node_pkg
-    FROM mc_group g
-    INNER JOIN mc_package p
-    ON  p.mcgroup=g.group_id
-    -- Tasks Contained in a Folder
-    UNION ALL
-    SELECT t.taskid AS node_id
-      ,t.taskgroup  AS parent_node_id
-      ,'G'          AS parent_node_type
-      ,t.taskname   AS node_name
-      ,'T'          AS node_type
-      ,t.mcpackageid as node_pkg
-    FROM mc_group g
-    INNER JOIN mxp_tasks t
-    ON  t.taskgroup=g.group_id
-    -- Top Level Process, Form or Job Folder of Package
-    UNION ALL
-    SELECT group_id AS node_id
-      ,mcpackageid  AS parent_node_id
-      ,'P'          AS parent_node_type
-      ,group_name   AS node_name
-      ,'G'          AS node_type
-      ,mcpackageid  as node_pkg
-    FROM mc_group
-    WHERE NOT provision_group=2 -- package folder
-    AND parent_group        IS NULL
-    -- Package, Process, Form or Job Folders Below Other Folders (Child Folders)
-    UNION ALL
-    SELECT group_id AS node_id
-      ,parent_group AS parent_node_id
-      ,'G'          AS parent_node_type
-      ,group_name   AS node_name
-      ,'G'          AS node_type
-      ,mcpackageid  as node_pkg
-    FROM mc_group
-    WHERE parent_group IS NOT NULL
-    -- Tasks Contained in a Process (Task Group)
-    UNION ALL
-    SELECT l.tasklnk AS node_id
-      ,l.taskref     AS parent_node_id
-      ,'T'           AS parent_node_type
-      ,CASE p.actiontype
-            WHEN -4 --Switch Task
-            THEN '[CASE '
-                || l.childgroup
-                || '] - '
-                || c.taskname
-            WHEN -3 --Conditional Task
-            THEN
-                CASE l.childgroup
-                    WHEN '1'
-                    THEN '[CASE TRUE] - '
-                        || c.taskname
-                    ELSE '[CASE FALSE] - '
-                        || c.taskname
-                END
-            ELSE c.taskname
-        END AS node_name
-      ,'T'  AS node_type
-      ,c.mcpackageid as node_pkg
-    FROM mxp_tasklnk l
-    INNER JOIN mxp_tasks p
-    ON  l.taskref=p.taskid
-    INNER JOIN mxp_tasks c
-    ON  l.tasklnk=c.taskid
-    -- Provisioning Jobs
-    UNION ALL
-    SELECT j.jobid AS node_id
-      ,t.taskid    AS parent_node_id
-      ,'T'         AS parent_node_type
-      ,j.NAME      AS node_name
-      ,'J'         AS node_type
-      ,j.mcpackageid as node_pkg
-    FROM mc_jobs j
-    INNER JOIN mxp_tasks t
-    ON  j.jobguid    =t.jobguid
-    WHERE j.provision=1
-    -- Regular Jobs
-    UNION ALL
-    SELECT j.jobid AS node_id
-      ,group_id    AS parent_node_id
-      ,'G'         AS parent_node_type
-      ,j.NAME      AS node_name
-      ,'J'         AS node_type
-      ,j.mcpackageid as node_pkg
-    FROM mc_jobs j
-    WHERE j.provision=0
-    -- Package Scripts
-    UNION ALL
-    SELECT mcscriptid                       AS node_id
-      ,mcpackageid                          AS parent_node_id
-      ,'P'                                  AS parent_node_type
-      ,CAST(mcscriptname AS VARCHAR2(4000)) AS node_name
-      ,'S'                                  AS node_type
-      ,mcpackageid                          as node_pkg
-    FROM mc_package_scripts
-    )--nodes
-  ,tree
-    -- ORA requires list of column aliases in CTE definition, MSS doesn't
-    (node_id,node_type,node_name,node_pkg,parent_node_id,parent_node_type,node_path ,path_len) AS
-    (SELECT node_id
-      ,node_type
-      ,node_name
-      ,node_pkg
-      ,parent_node_id
-      ,parent_node_type
-      ,'/'
-        || node_id
-        || ':'
-        || node_name AS node_path
-      ,0             AS path_len
-    FROM nodes
-    WHERE parent_node_id IS NULL
-    UNION ALL
-    SELECT n.node_id
-      ,n.node_type
-      ,n.node_name
-      ,n.node_pkg
-      ,n.parent_node_id
-      ,n.parent_node_type
-      ,t.node_path
-        || '/'
-        || n.node_id
-        || ':'
-        || n.node_name AS node_path
-      ,t.path_len + 1  AS path_len
-        -- DB2 CTEs require pre-ANSI JOIN syntax (equivalent to INNER JOIN)
-    FROM nodes n
-      , tree t
-    WHERE t.node_id=n.parent_node_id
-    AND t.node_type=n.parent_node_type
-        -- Guard against infinite recursion in case of cyclic links.
-        -- The below will query to a maximum depth of 99, which will
-        -- work fine with MSSQL's default maxrecursion limit of 100.
-    AND t.path_len<100
-    )
-,tree_pkg as (
-select 
-    a.*
-    ,b.mcqualifiedname as node_pkg_name
-    from tree a
-    left outer join mc_package b
-    on a.node_pkg=b.mcpackageid
-)
-SELECT a.*
-    ,b.node_pkg_name
-    ,b.node_path
-    FROM all_text_cte a
-    left outer join tree_pkg b
-    on a.node_type=b.node_type
-    and a.node_id=b.node_id
+SELECT *
+    FROM all_text_cte
     WHERE 
         case 
             when (select st from search_term_cte) is not null
@@ -502,5 +322,4 @@ SELECT a.*
                            ,upper((SELECT st FROM search_term_cte)))
             else 1
         end > 0
-    AND lower(b.node_path) not like '%obsoleted%'
-    ORDER BY a.node_type, a.node_id;
+    ORDER BY node_type, node_id;

@@ -60,7 +60,7 @@
 -- *******************************************************************
 WITH nodes
     -- ORA requires a list of column aliases, SQL Server doesn't
-    (node_id, parent_node_id, parent_node_type, node_name, node_type) AS
+    (node_id, parent_node_id, parent_node_type, node_name, node_type, node_pkg) AS
     (
     -- Identity Stores
     SELECT is_id   AS node_id
@@ -68,6 +68,7 @@ WITH nodes
       ,NULL        AS parent_node_type
       ,idstorename AS node_name
       ,'I'         AS node_type
+      ,null        as node_pkg
     FROM mxi_idstores
     -- Top Level Package Folders for Identity Store
     UNION ALL
@@ -76,6 +77,7 @@ WITH nodes
       ,'I'          AS parent_node_type
       ,group_name   AS node_name
       ,'G'          AS node_type
+      ,mcpackageid  as node_pkg
     FROM mc_group
     WHERE provision_group=2 -- package folder
     AND parent_group    IS NULL
@@ -87,6 +89,7 @@ WITH nodes
       ,'G'               AS parent_node_type
       ,p.mcqualifiedname AS node_name
       ,'P'               AS node_type
+      ,p.mcpackageid     as node_pkg
     FROM mc_group g
     INNER JOIN mc_package p
     ON  p.mcgroup=g.group_id
@@ -97,6 +100,7 @@ WITH nodes
       ,'G'          AS parent_node_type
       ,t.taskname   AS node_name
       ,'T'          AS node_type
+      ,t.mcpackageid as node_pkg
     FROM mc_group g
     INNER JOIN mxp_tasks t
     ON  t.taskgroup=g.group_id
@@ -107,6 +111,7 @@ WITH nodes
       ,'P'          AS parent_node_type
       ,group_name   AS node_name
       ,'G'          AS node_type
+      ,mcpackageid  as node_pkg
     FROM mc_group
     WHERE NOT provision_group=2 -- package folder
     AND parent_group        IS NULL
@@ -117,6 +122,7 @@ WITH nodes
       ,'G'          AS parent_node_type
       ,group_name   AS node_name
       ,'G'          AS node_type
+      ,mcpackageid  as node_pkg
     FROM mc_group
     WHERE parent_group IS NOT NULL
     -- Tasks Contained in a Process (Task Group)
@@ -142,6 +148,7 @@ WITH nodes
             ELSE c.taskname
         END AS node_name
       ,'T'  AS node_type
+      ,c.mcpackageid as node_pkg
     FROM mxp_tasklnk l
     INNER JOIN mxp_tasks p
     ON  l.taskref=p.taskid
@@ -154,6 +161,7 @@ WITH nodes
       ,'T'         AS parent_node_type
       ,j.NAME      AS node_name
       ,'J'         AS node_type
+      ,j.mcpackageid as node_pkg
     FROM mc_jobs j
     INNER JOIN mxp_tasks t
     ON  j.jobguid    =t.jobguid
@@ -165,6 +173,7 @@ WITH nodes
       ,'G'         AS parent_node_type
       ,j.NAME      AS node_name
       ,'J'         AS node_type
+      ,j.mcpackageid as node_pkg
     FROM mc_jobs j
     WHERE j.provision=0
     -- Package Scripts
@@ -174,14 +183,16 @@ WITH nodes
       ,'P'                                  AS parent_node_type
       ,CAST(mcscriptname AS VARCHAR2(4000)) AS node_name
       ,'S'                                  AS node_type
+      ,mcpackageid                          as node_pkg
     FROM mc_package_scripts
     )--nodes
   ,tree
     -- ORA requires list of column aliases in CTE definition, MSS doesn't
-    (node_id,node_type,node_name,parent_node_id,parent_node_type,node_path ,path_len) AS
+    (node_id,node_type,node_name,node_pkg,parent_node_id,parent_node_type,node_path ,path_len) AS
     (SELECT node_id
       ,node_type
       ,node_name
+      ,node_pkg
       ,parent_node_id
       ,parent_node_type
       ,'/'
@@ -195,6 +206,7 @@ WITH nodes
     SELECT n.node_id
       ,n.node_type
       ,n.node_name
+      ,n.node_pkg
       ,n.parent_node_id
       ,n.parent_node_type
       ,t.node_path
@@ -213,17 +225,24 @@ WITH nodes
         -- work fine with MSSQL's default maxrecursion limit of 100.
     AND t.path_len<100
     )
-SELECT node_id
-  ,node_type
-  ,node_name
-  ,node_path
-  ,path_len
-FROM tree
-WHERE 1=1
-    -- Uncomment and adapt any or all of the below lines
-    --AND node_id   = 35
-    --AND node_type = 'T'
-    --AND node_name = 'Provision'
-    --AND node_path like '%com.sap.provisioning.engine%'
-ORDER BY path_len
-  ,node_path ;
+,tree_pkg as (
+select 
+    a.*
+    ,b.mcqualifiedname as node_pkg_name
+    from tree a
+    left outer join mc_package b
+    on a.node_pkg=b.mcpackageid
+)
+SELECT 
+    node_pkg_name
+    ,node_id
+    ,node_type
+    ,node_name
+    ,node_path
+    ,path_len
+    FROM tree_pkg
+    WHERE 1=1
+    AND node_pkg_name='com.sap.idm.provisioning.engine'
+    AND NOT lower(node_path) like '%obsoleted%'
+    ORDER BY node_pkg_name,node_path
+    ;
