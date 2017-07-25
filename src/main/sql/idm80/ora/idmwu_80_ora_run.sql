@@ -109,7 +109,7 @@
 -- *******************************************************************
 WITH search_term_cte(st) AS
     (
-        SELECT 'BASF_GMT_USER_REG_ONE_TIME_LINK' FROM dual
+        SELECT 'YOUR_SEARCH_TERM_HERE' FROM dual
     )
 ,xml_datasource_cte(node_id,node_type,node_name,native_xml) AS
     (
@@ -480,27 +480,28 @@ WITH search_term_cte(st) AS
         -- work fine with MSSQL's default maxrecursion limit of 100.
     AND t.path_len<100
     )
-,tree_pkg as (
-select 
+,tree_pkg AS (
+SELECT 
     a.*
-    ,b.mcqualifiedname as node_pkg_name
-    from tree a
-    left outer join mc_package b
-    on a.node_pkg=b.mcpackageid
+    ,b.mcqualifiedname AS node_pkg_name
+    FROM tree a
+    LEFT OUTER JOIN mc_package b
+    ON a.node_pkg=b.mcpackageid
 )
 SELECT a.*
     ,b.node_pkg_name
     ,b.node_path
     FROM all_text_cte a
-    left outer join tree_pkg b
-    on a.node_type=b.node_type
-    and a.node_id=b.node_id
+    LEFT OUTER JOIN tree_pkg b
+    ON a.node_type=b.node_type
+    AND a.node_id=b.node_id
     WHERE 
-        case 
-            when (select st from search_term_cte) is not null
-                then instr(upper(match_location_text)
+        CASE 
+            WHEN (SELECT st FROM search_term_cte) IS NOT NULL
+                THEN instr(upper(match_location_text)
                            ,upper((SELECT st FROM search_term_cte)))
             else 1
         end > 0
-    AND lower(b.node_path) not like '%obsoleted%'
+    -- Note that "null not like 'pattern'" is ALWAYS false
+    AND ( b.node_path IS NULL OR lower(b.node_path) NOT LIKE '%obsoleted%' )
     ORDER BY a.node_type, a.node_id;
